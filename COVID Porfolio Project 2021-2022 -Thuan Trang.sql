@@ -6,7 +6,7 @@ order by 3,4
 
 select *
 from profolioproject.covidvaccinations
-order by 3,4
+order by 3,4;
 
 
 /* Select data using */
@@ -28,8 +28,8 @@ order by 1
 
 select location, date, total_cases, MyUnknownColumn as Population, (total_cases/MyUnknownColumn)*100 as PopulationInfected
 from profolioproject.coviddeaths
-where location like '%states'
-order by 1 
+-- where location like '%NAM'
+order by 1, 2 
 ;
 
 /*Countries with Highest Infection Rate compared to Population*/
@@ -45,7 +45,7 @@ order by PopulationInfected desc
 
 -- Continent 
 
-select continent, max(cast(total_deaths as double)) as TotalDeathsCount
+select continent, max(cast(total_deaths as signed)) as TotalDeathsCount
 from profolioproject.coviddeaths
 where continent is not null
 group by continent 
@@ -64,12 +64,11 @@ order by 1, 2
 -- JOIN Looking at total population vs vaccination
 -- SUM(CONVERT(int, vac.new_vaccinations))
 
-
-With PopvsVac (continent , location , date, MyUnknownColumn, new_vaccinations, totalvaci)
-as 
+-- Using CTE to perform Calculation on Partition By in previous query
+With PopvsVac as 
 (
-select dea.continent, dea.location, dea.date, dea.MyUnknownColumn as population, vac.new_vaccinations 
-, SUM(cast(vac.new_vaccinations as double)) OVER (partition by dea.location order by dea.location, dea.date) as totalvaci
+select dea.continent, dea.location, dea.date, dea.MyUnknownColumn, vac.new_vaccinations 
+, SUM(cast(vac.new_vaccinations as signed)) OVER (partition by dea.location order by dea.location, dea.date) as totalvaci
 -- ,(totalvaci/MyUnknownColumn)*100 as 
 from profolioproject.coviddeaths dea
 Join profolioproject.covidvaccinations vac
@@ -78,50 +77,64 @@ and dea.date = vac.date
 where dea.continent is not null
 -- order by 2
 )
-
-select *, (totalvaci/MyUnknownColumn)*100 as popvsvac
-from PopvsVac;
+SELECT
+    Continent,
+    Location,
+    Date,
+    MyUnknownColumn as population,
+    New_Vaccinations,
+    totalvaci,
+    (totalvaci / MyUnknownColumn) * 100 AS VaccinationPercentage
+FROM
+    PopvsVac;
 -- USE CTE because we cannot use the name totalvaci after we just created so we going to use the temp table
 
--- TEMP TABLE
+-- Using Temp Table to perform Calculation on Partition By in previous query
 
-DROP TABLE IF exists percentpopulationvaccinated;
-CREATE TEMPORARY TABLE percentpopulationvaccinated 
-(continent nvarchar(255), 
-location nvarchar(255), 
+DROP TEMPORARY TABLE IF EXISTS PercentPopulationVaccinated;
+CREATE TEMPORARY TABLE PercentPopulationVaccinated 
+(continent varchar(255), 
+location varchar(255), 
 date datetime, 
 MyUnknownColumn numeric,  
 new_vaccinations numeric, 
 totalvaci numeric);
 
-insert into percentpopulationvaccinated
-select dea.continent, dea.location, dea.date, dea.MyUnknownColumn as population, vac.new_vaccinations 
-, SUM(cast(vac.new_vaccinations as double)) OVER (partition by dea.location order by dea.location, dea.date) as totalvaci
--- ,(totalvaci/MyUnknownColumn)*100 as 
+-- the REGEXP function is used to check if the new_vaccinations value matches a numeric pattern. If it matches, the value is cast to DECIMAL(10, 2). If it doesn't match (i.e., it's not a numeric value), a default value of 0 is used.
+insert into PercentPopulationVaccinated (continent, location, date, MyUnknownColumn, new_vaccinations, totalvaci)
+select dea.continent, dea.location, STR_TO_DATE(dea.date, '%m/%d/%Y'),  /*Convert date format */ dea.MyUnknownColumn, 
+CASE
+        WHEN vac.new_vaccinations REGEXP '^[0-9]+(\.[0-9]+)?$' THEN CAST(vac.new_vaccinations AS DECIMAL(10, 2))
+        ELSE 0 -- Or another suitable default value
+    END AS New_vaccinations,
+    SUM(CASE
+        WHEN vac.new_vaccinations REGEXP '^[0-9]+(\.[0-9]+)?$' THEN CAST(vac.new_vaccinations AS DECIMAL(10, 2))
+        ELSE 0
+    END) OVER (PARTITION BY dea.Location ORDER BY dea.location, dea.Date) AS totalvaci
 from profolioproject.coviddeaths dea
 Join profolioproject.covidvaccinations vac
 On  dea.date = vac.date
 and dea.location = vac.location;
--- where dea.continent is not null
+-- where dea.continent is not null ;
 -- order by 2;
 
-select *, (totalvaci/MyUnknownColumn)*100 as percentpopulationvaccinated
-from percentpopulationvaccinated;
+SELECT *,
+       (totalvaci / MyUnknownColumn) * 100 AS VaccinationPercentage
+FROM PercentPopulationVaccinated;
 
 -- Creating view to store data for later visualization
 
 CREATE VIEW percentpopulationvaccinated as 
 select dea.continent, dea.location, dea.date, dea.MyUnknownColumn as population, vac.new_vaccinations 
-, SUM(cast(vac.new_vaccinations as double)) OVER (partition by dea.location order by dea.location, dea.date) as percentpopulationvaccinated
+, SUM(vac.new_vaccinations) OVER (partition by dea.location order by dea.location, dea.date) as percentpopulationvaccinated
 -- ,(totalvaci/MyUnknownColumn)*100 as 
 from profolioproject.coviddeaths dea
 Join profolioproject.covidvaccinations vac
 On  dea.date = vac.date
-and dea.location = vac.locationpercentpopulationvaccinated
+and dea.location = vac.location
 where dea.continent is not null;
  -- order by 2;
 
 SELECT * FROM profolioproject.percentpopulationvaccinated;
 
-
-
+drop view percentpopulationvaccinated;
